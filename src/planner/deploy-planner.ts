@@ -14,12 +14,6 @@ let operationCounter = 0;
 
 const logger = createLogger('DeployPlanner');
 
-function hasPathSeparator(pattern: string): boolean {
-  const normalized = toPosix(pattern);
-
-  return normalized.includes('/');
-}
-
 function generateOperationId(prefix: string): string {
   return `${prefix}-${operationCounter++}`;
 }
@@ -38,19 +32,11 @@ function buildFilters(entry: DeployEntry): EntryFilters | undefined {
   const includeBasenameRegexps: RegExp[] = [];
 
   for (const pattern of excludePatterns) {
-    if (hasPathSeparator(pattern)) {
-      excludePathRegexps.push(globToRegex(pattern));
-    } else {
-      excludeBasenameRegexps.push(globToRegex(pattern));
-    }
+    (toPosix(pattern).includes('/') ? excludePathRegexps : excludeBasenameRegexps).push(globToRegex(pattern));
   }
 
   for (const pattern of includePatterns) {
-    if (hasPathSeparator(pattern)) {
-      includePathRegexps.push(globToRegex(pattern));
-    } else {
-      includeBasenameRegexps.push(globToRegex(pattern));
-    }
+    (toPosix(pattern).includes('/') ? includePathRegexps : includeBasenameRegexps).push(globToRegex(pattern));
   }
 
   return {
@@ -162,8 +148,7 @@ export class DeployPlanner {
           operations.push({
             target,
             context,
-            isDirectory,
-            type: OperationType.SVN_DELETE,
+            type: isDirectory ? OperationType.DELETE_DIRECTORY : OperationType.DELETE_FILE,
             id: generateOperationId('svn-delete'),
             description: `SVN 删除旧目标: ${target}`
           } satisfies Operation);

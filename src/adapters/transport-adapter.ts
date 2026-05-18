@@ -64,12 +64,6 @@ export interface FtpTransportAdapter extends TransportAdapter {
  */
 export interface SvnTransportAdapter extends TransportAdapter {
   /**
-   * @method add
-   * @description 添加待处理路径到版本控制
-   */
-  add(): Promise<void>;
-
-  /**
    * @method commit
    * @description 提交待处理变更
    * @param message 提交说明

@@ -95,13 +95,6 @@ export class DeployExecutor {
       case OperationType.DELETE_DIRECTORY:
         await adapter.deleteDirectory(operation.target);
         break;
-      case OperationType.SVN_DELETE:
-        if (operation.isDirectory) {
-          await adapter.deleteDirectory(operation.target);
-        } else {
-          await adapter.deleteFile(operation.target);
-        }
-        break;
       case OperationType.SVN_COMMIT:
         if (isSvnAdapter(adapter)) {
           await adapter.commit(context.message ?? operation.context?.commitMessage);
@@ -267,7 +260,7 @@ function isFtpAdapter(adapter: TransportAdapter): adapter is FtpTransportAdapter
 }
 
 function isSvnAdapter(adapter: TransportAdapter): adapter is SvnTransportAdapter {
-  return 'add' in adapter && 'commit' in adapter;
+  return 'commit' in adapter;
 }
 
 /**

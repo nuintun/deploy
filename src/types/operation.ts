@@ -13,7 +13,6 @@ export const enum OperationType {
   UPLOAD_DIRECTORY,
   DELETE_FILE,
   DELETE_DIRECTORY,
-  SVN_DELETE,
   SVN_COMMIT
 }
 
@@ -97,17 +96,6 @@ export interface DeleteDirectoryOperation extends BaseOperation {
 }
 
 /**
- * @interface SvnDeleteOperation
- * @description SVN 删除操作
- */
-export interface SvnDeleteOperation extends BaseOperation {
-  target: string;
-  isDirectory: boolean;
-  context?: SvnOperationContext;
-  type: OperationType.SVN_DELETE;
-}
-
-/**
  * @interface SvnCommitOperation
  * @description SVN 提交操作
  */
@@ -121,7 +109,6 @@ export type Operation =
   | UploadDirectoryOperation
   | DeleteFileOperation
   | DeleteDirectoryOperation
-  | SvnDeleteOperation
   | SvnCommitOperation;
 
 /**

@@ -12,7 +12,6 @@ import { SvnTransportAdapter } from '/adapters/transport-adapter';
 import { EntryFilters } from '/types/config';
 
 const SVN_EXECUTABLE = 'svn';
-const DEFAULT_CONCURRENCY = 5;
 const STATUS_BATCH_SIZE = 50;
 
 const logger = createLogger('SvnAdapter');
@@ -152,56 +151,12 @@ export class SvnAdapter implements SvnTransportAdapter {
   async uploadDirectory(source: string, target: string, filters?: EntryFilters): Promise<void> {
     this.#assertSafePath(target);
 
-    const files: { fullPath: string; targetFilePath: string }[] = [];
     const walker = this.#fileWalker.walk(source, { filters });
 
     for await (const entry of walker) {
       if (entry.isFile) {
-        files.push({
-          fullPath: entry.fullPath,
-          targetFilePath: join(target, entry.relativePath)
-        });
+        await this.uploadFile(entry.fullPath, join(target, entry.relativePath));
       }
-    }
-
-    let index = 0;
-    let firstError: Error | null = null;
-
-    const concurrency = DEFAULT_CONCURRENCY;
-    const executing = new Set<Promise<void>>();
-
-    while (index < files.length) {
-      if (firstError) {
-        break;
-      }
-
-      const { fullPath, targetFilePath } = files[index++];
-
-      const task = this.uploadFile(fullPath, targetFilePath).catch(err => {
-        firstError = err instanceof Error ? err : new Error(String(err));
-      });
-
-      executing.add(task);
-
-      task.finally(() => {
-        executing.delete(task);
-      });
-
-      if (executing.size >= concurrency) {
-        try {
-          await Promise.race(executing);
-        } catch {
-          // error already captured in .catch above
-        }
-      }
-    }
-
-    if (executing.size > 0) {
-      await Promise.allSettled(executing);
-    }
-
-    if (firstError) {
-      throw firstError;
     }
   }
 
@@ -213,7 +168,7 @@ export class SvnAdapter implements SvnTransportAdapter {
     await this.#removePath(path, true);
   }
 
-  async add(): Promise<void> {
+  async #add(): Promise<void> {
     if (this.#pendingPaths.size === 0) {
       return;
     }
@@ -231,7 +186,7 @@ export class SvnAdapter implements SvnTransportAdapter {
       return;
     }
 
-    await this.add();
+    await this.#add();
 
     const paths = [...this.#pendingPaths];
     const statusResult = await this.#runSvnCommand(['status', ...paths]);
