@@ -2,7 +2,7 @@
  * @module path-utils
  */
 
-import { dirname as nodeDirname, join as nodeJoin, resolve as nodeResolve } from 'node:path';
+import { posix } from 'node:path';
 
 /**
  * @function toPosix
@@ -19,7 +19,7 @@ export function toPosix(path: string): string {
  * @param path 路径字符串
  */
 export function dirname(path: string): string {
-  return toPosix(nodeDirname(path));
+  return posix.dirname(toPosix(path));
 }
 
 /**
@@ -37,7 +37,7 @@ export function normalize(path: string): string {
  * @param paths 路径片段
  */
 export function join(...paths: string[]): string {
-  return toPosix(nodeJoin(...paths));
+  return toPosix(posix.join(...paths.map(toPosix)));
 }
 
 /**
@@ -46,5 +46,5 @@ export function join(...paths: string[]): string {
  * @param paths 路径片段
  */
 export function resolve(...paths: string[]): string {
-  return toPosix(nodeResolve(...paths));
+  return toPosix(posix.resolve(...paths.map(toPosix)));
 }
