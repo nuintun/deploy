@@ -2,22 +2,12 @@
  * @module deploy-executor
  */
 
-import {
-  DeployPlan,
-  ExecutionContext,
-  ExecutionResult,
-  FtpOperationContext,
-  Operation,
-  OperationContext,
-  OperationResult,
-  OperationType,
-  SvnOperationContext
-} from '/types/operation';
 import { FileWalker } from '/utils/file-walker';
 import { FtpAdapter } from '/adapters/ftp-adapter';
 import { SvnAdapter } from '/adapters/svn-adapter';
+import { TransportAdapter } from '/adapters/transport-adapter';
 import { captureError, createLogger, getErrorMessage } from '/utils/logger';
-import { FtpTransportAdapter, SvnTransportAdapter, TransportAdapter } from '/adapters/transport-adapter';
+import { DeployPlan, ExecutionContext, ExecutionResult, Operation, OperationResult, OperationType } from '/types/operation';
 
 const logger = createLogger('DeployExecutor');
 
@@ -34,7 +24,11 @@ function createErrorResult(operationId: string, error: string, duration?: number
 }
 
 export class DeployExecutor {
-  #adapterFactories = new Map<string, () => TransportAdapter>();
+  #adapterFactories: Map<string, () => TransportAdapter>;
+
+  constructor(adapterFactories: Map<string, () => TransportAdapter>) {
+    this.#adapterFactories = adapterFactories;
+  }
 
   async #resolveAdapter(adapterKey: string, activeAdapters: Map<string, TransportAdapter>): Promise<TransportAdapter> {
     const existing = activeAdapters.get(adapterKey);
@@ -53,9 +47,7 @@ export class DeployExecutor {
 
     const adapter = factory();
 
-    if (isFtpAdapter(adapter)) {
-      await adapter.connect();
-    }
+    await adapter.connect?.();
 
     activeAdapters.set(adapterKey, adapter);
 
@@ -64,11 +56,7 @@ export class DeployExecutor {
     return adapter;
   }
 
-  async #executeOperation(
-    operation: Operation,
-    context: ExecutionContext,
-    activeAdapters: Map<string, TransportAdapter>
-  ): Promise<void> {
+  async #executeOperation(operation: Operation, activeAdapters: Map<string, TransportAdapter>): Promise<void> {
     if (!operation.context) {
       logger.warn(`操作 ${operation.id} 缺少适配器上下文，跳过执行`);
 
@@ -87,18 +75,17 @@ export class DeployExecutor {
         await adapter.uploadFile(operation.source, operation.target);
         break;
       case OperationType.UPLOAD_DIRECTORY:
-        await adapter.uploadDirectory(operation.source, operation.target, operation.filters);
+        await adapter.uploadDirectory(
+          operation.source,
+          operation.target,
+          operation.filter ? { filter: operation.filter } : undefined
+        );
         break;
       case OperationType.DELETE_FILE:
         await adapter.deleteFile(operation.target);
         break;
       case OperationType.DELETE_DIRECTORY:
         await adapter.deleteDirectory(operation.target);
-        break;
-      case OperationType.SVN_COMMIT:
-        if (isSvnAdapter(adapter)) {
-          await adapter.commit(context.message ?? operation.context?.commitMessage);
-        }
         break;
       default:
         assertNever(operation);
@@ -125,34 +112,6 @@ export class DeployExecutor {
     logger.debug('适配器清理完成');
   }
 
-  registerAdapter(name: string, factory: () => TransportAdapter): void {
-    if (this.#adapterFactories.has(name)) {
-      logger.warn(`适配器 "${name}" 已存在，将被覆盖`);
-    }
-
-    this.#adapterFactories.set(name, factory);
-
-    logger.info(`适配器注册成功: ${name}`);
-  }
-
-  unregisterAdapter(name: string): boolean {
-    const removed = this.#adapterFactories.delete(name);
-
-    if (removed) {
-      logger.info(`适配器已注销: ${name}`);
-    }
-
-    return removed;
-  }
-
-  hasAdapter(name: string): boolean {
-    return this.#adapterFactories.has(name);
-  }
-
-  getRegisteredAdapters(): string[] {
-    return Array.from(this.#adapterFactories.keys());
-  }
-
   async execute(plan: DeployPlan, context: ExecutionContext): Promise<ExecutionResult> {
     logger.info(`开始执行部署计划: ${plan.name}`);
     logger.debug('执行上下文', { dryRun: context.dryRun, baseDir: context.baseDir });
@@ -163,7 +122,7 @@ export class DeployExecutor {
       return this.#executeDryRun(plan, startTime);
     }
 
-    return this.#executeReal(plan, context, startTime);
+    return this.#executeReal(plan, startTime);
   }
 
   #executeDryRun(plan: DeployPlan, startTime: number): ExecutionResult {
@@ -184,7 +143,7 @@ export class DeployExecutor {
     };
   }
 
-  async #executeReal(plan: DeployPlan, context: ExecutionContext, startTime: number): Promise<ExecutionResult> {
+  async #executeReal(plan: DeployPlan, startTime: number): Promise<ExecutionResult> {
     const activeAdapters = new Map<string, TransportAdapter>();
     const operationResults: OperationResult[] = [];
 
@@ -197,7 +156,7 @@ export class DeployExecutor {
         try {
           logger.info(`执行: ${operation.description}`);
 
-          await this.#executeOperation(operation, context, activeAdapters);
+          await this.#executeOperation(operation, activeAdapters);
 
           operationResults.push(createSuccessResult(operation.id, Date.now() - opStartTime));
         } catch (error) {
@@ -247,22 +206,6 @@ export class DeployExecutor {
   }
 }
 
-function isFtpContext(ctx: OperationContext): ctx is FtpOperationContext {
-  return ctx.adapter === 'ftp';
-}
-
-function isSvnContext(ctx: OperationContext): ctx is SvnOperationContext {
-  return ctx.adapter === 'svn';
-}
-
-function isFtpAdapter(adapter: TransportAdapter): adapter is FtpTransportAdapter {
-  return 'connect' in adapter;
-}
-
-function isSvnAdapter(adapter: TransportAdapter): adapter is SvnTransportAdapter {
-  return 'commit' in adapter;
-}
-
 /**
  * @function createExecutor
  * @description 根据部署计划创建并配置执行器，自动注册所需适配器
@@ -271,8 +214,8 @@ function isSvnAdapter(adapter: TransportAdapter): adapter is SvnTransportAdapter
  */
 export function createExecutor(plan: DeployPlan): DeployExecutor {
   const fileWalker = new FileWalker();
-  const executor = new DeployExecutor();
   const registeredAdapters = new Set<string>();
+  const adapterFactories = new Map<string, () => TransportAdapter>();
 
   for (const operation of plan.operations) {
     if (!operation.context) {
@@ -287,10 +230,10 @@ export function createExecutor(plan: DeployPlan): DeployExecutor {
 
     const context = operation.context;
 
-    if (isFtpContext(context)) {
-      executor.registerAdapter(adapterKey, () => new FtpAdapter(context, fileWalker));
-    } else if (isSvnContext(context)) {
-      executor.registerAdapter(adapterKey, () => new SvnAdapter(context, fileWalker));
+    if (context.adapter === 'ftp') {
+      adapterFactories.set(adapterKey, () => new FtpAdapter(context, fileWalker));
+    } else if (context.adapter === 'svn') {
+      adapterFactories.set(adapterKey, () => new SvnAdapter(context, fileWalker));
     }
 
     registeredAdapters.add(adapterKey);
@@ -298,5 +241,5 @@ export function createExecutor(plan: DeployPlan): DeployExecutor {
 
   logger.debug(`已注册适配器`, { adapters: Array.from(registeredAdapters) });
 
-  return executor;
+  return new DeployExecutor(adapterFactories);
 }

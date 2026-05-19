@@ -3,28 +3,18 @@
  */
 
 import { Client } from 'basic-ftp';
+import { dirname } from '/utils/path';
 import { FileWalker } from '/utils/file-walker';
 import { FtpOperationContext } from '/types/operation';
 import { createLogger, getErrorMessage } from '/utils/logger';
-import { FtpTransportAdapter } from '/adapters/transport-adapter';
-import { EntryFilters } from '/types/config';
+import { DirectoryUploadOptions, TransportAdapter } from '/adapters/transport-adapter';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_TIMEOUT = 30000;
 
 const logger = createLogger('FtpAdapter');
 
-function getDirname(path: string): string | null {
-  const lastSlash = path.lastIndexOf('/');
-
-  if (lastSlash <= 0) {
-    return null;
-  }
-
-  return path.substring(0, lastSlash);
-}
-
-export class FtpAdapter implements FtpTransportAdapter {
+export class FtpAdapter implements TransportAdapter {
   #client: Client;
   #connected = false;
   #fileWalker: FileWalker;
@@ -60,8 +50,9 @@ export class FtpAdapter implements FtpTransportAdapter {
         await this.#client.remove(path);
       } catch (removeError) {
         const removeMessage = getErrorMessage(removeError);
+        const exists = await this.#remotePathExists(path);
 
-        if (!(await this.#remotePathExists(path))) {
+        if (!exists) {
           logger.debug(`远程路径不存在，跳过删除`, { path });
 
           return;
@@ -73,18 +64,22 @@ export class FtpAdapter implements FtpTransportAdapter {
   }
 
   async #remotePathExists(path: string): Promise<boolean> {
-    const dirname = getDirname(path);
+    const dir = dirname(path);
 
-    if (!dirname) {
+    if (!dir || dir === '/') {
       return true;
     }
 
     try {
-      const list = await this.#client.list(dirname);
+      const list = await this.#client.list(dir);
 
       return list.some(entry => entry.name === path || path.endsWith(`/${entry.name}`));
-    } catch {
-      return true;
+    } catch (error) {
+      const message = getErrorMessage(error);
+
+      logger.warn(`查询远程路径失败，视为不存在`, { path, error: message });
+
+      return false;
     }
   }
 
@@ -123,16 +118,16 @@ export class FtpAdapter implements FtpTransportAdapter {
 
     logger.debug(`上传文件`, { source, target });
 
-    const dirname = getDirname(target);
+    const dir = dirname(target);
 
-    if (dirname) {
-      await this.#client.ensureDir(dirname);
+    if (dir && dir !== '/') {
+      await this.#client.ensureDir(dir);
     }
 
     await this.#client.uploadFrom(source, target);
   }
 
-  async uploadDirectory(source: string, target: string, filters?: EntryFilters): Promise<void> {
+  async uploadDirectory(source: string, target: string, options?: DirectoryUploadOptions): Promise<void> {
     this.#assertConnected();
 
     logger.debug(`上传目录`, { source, target });
@@ -141,17 +136,17 @@ export class FtpAdapter implements FtpTransportAdapter {
 
     this.#ensuredDirs.add(target);
 
-    const walker = this.#fileWalker.walk(source, { filters });
+    const walker = this.#fileWalker.walk(source, options);
 
     for await (const entry of walker) {
       if (entry.isFile) {
         const remoteFilePath = `${target}/${entry.relativePath}`;
-        const dirname = getDirname(remoteFilePath);
+        const dir = dirname(remoteFilePath);
 
-        if (dirname && !this.#ensuredDirs.has(dirname)) {
-          await this.#client.ensureDir(dirname);
+        if (dir && dir !== '/' && !this.#ensuredDirs.has(dir)) {
+          await this.#client.ensureDir(dir);
 
-          this.#ensuredDirs.add(dirname);
+          this.#ensuredDirs.add(dir);
         }
 
         await this.#client.uploadFrom(entry.fullPath, remoteFilePath);

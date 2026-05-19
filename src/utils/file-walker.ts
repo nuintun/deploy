@@ -3,8 +3,7 @@
  */
 
 import { basename } from 'node:path';
-import { EntryFilters } from '/types/config';
-import { join, normalize, resolve } from './path';
+import { join, resolve } from './path';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 
 /**
@@ -24,8 +23,8 @@ export interface WalkEntry {
  * @description 文件遍历选项
  */
 export interface WalkOptions {
-  filters?: EntryFilters;
   followSymlinks?: boolean;
+  filter?: (relativePath: string) => boolean;
 }
 
 /**
@@ -79,70 +78,6 @@ async function* readEntries(fullPath: string, followSymlinks: boolean): AsyncGen
 }
 
 export class FileWalker {
-  #matchesFilters(filters: EntryFilters | undefined, relativePath: string): boolean {
-    if (!filters) {
-      return true;
-    }
-
-    const normalized = normalize(relativePath);
-    const baseName = basename(normalized);
-
-    for (const regex of filters.excludeBasenameRegexps) {
-      if (regex.test(baseName)) {
-        return false;
-      }
-    }
-
-    for (const regex of filters.excludePathRegexps) {
-      if (regex.test(normalized)) {
-        return false;
-      }
-    }
-
-    const hasInclude = filters.includeBasenameRegexps.length > 0 || filters.includePathRegexps.length > 0;
-
-    if (!hasInclude) {
-      return true;
-    }
-
-    for (const regex of filters.includeBasenameRegexps) {
-      if (regex.test(baseName)) {
-        return true;
-      }
-    }
-
-    for (const regex of filters.includePathRegexps) {
-      if (regex.test(normalized)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  #shouldDescendDirectory(filters: EntryFilters | undefined, relativeDir: string): boolean {
-    if (!filters) {
-      return true;
-    }
-
-    const normalized = normalize(relativeDir);
-    const baseName = basename(normalized);
-
-    for (const regex of filters.excludeBasenameRegexps) {
-      if (regex.test(baseName)) {
-        return false;
-      }
-    }
-
-    for (const regex of filters.excludePathRegexps) {
-      if (regex.test(normalized)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   async *walk(baseDir: string, options: WalkOptions = {}): AsyncGenerator<WalkEntry, void, unknown> {
     baseDir = resolve(baseDir);
 
@@ -190,7 +125,7 @@ export class FileWalker {
         const childRelativePath = currentRelativePath ? join(currentRelativePath, entry.name) : entry.name;
 
         if (entry.isFile) {
-          if (!this.#matchesFilters(options.filters, childRelativePath)) {
+          if (!this.#shouldInclude(options.filter, childRelativePath)) {
             continue;
           }
 
@@ -202,7 +137,7 @@ export class FileWalker {
             isSymbolicLink: entry.isSymbolicLink
           };
         } else if (entry.isDirectory) {
-          if (!this.#shouldDescendDirectory(options.filters, childRelativePath)) {
+          if (!this.#shouldDescend(options.filter, childRelativePath)) {
             continue;
           }
 
@@ -210,5 +145,13 @@ export class FileWalker {
         }
       }
     }
+  }
+
+  #shouldInclude(filter: ((path: string) => boolean) | undefined, path: string): boolean {
+    return !filter || filter(path);
+  }
+
+  #shouldDescend(filter: ((path: string) => boolean) | undefined, dirPath: string): boolean {
+    return !filter || filter(dirPath + '/');
   }
 }

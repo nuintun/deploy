@@ -2,8 +2,6 @@
  * @module operation
  */
 
-import { EntryFilters } from '/types/config';
-
 /**
  * @enum OperationType
  * @description 部署操作类型枚举
@@ -12,8 +10,7 @@ export const enum OperationType {
   UPLOAD_FILE,
   UPLOAD_DIRECTORY,
   DELETE_FILE,
-  DELETE_DIRECTORY,
-  SVN_COMMIT
+  DELETE_DIRECTORY
 }
 
 /**
@@ -53,8 +50,8 @@ export interface BaseOperation {
   id: string;
   description: string;
   type: OperationType;
-  filters?: EntryFilters;
   context?: OperationContext;
+  filter?: (relativePath: string) => boolean;
 }
 
 /**
@@ -95,21 +92,7 @@ export interface DeleteDirectoryOperation extends BaseOperation {
   type: OperationType.DELETE_DIRECTORY;
 }
 
-/**
- * @interface SvnCommitOperation
- * @description SVN 提交操作
- */
-export interface SvnCommitOperation extends BaseOperation {
-  type: OperationType.SVN_COMMIT;
-  context?: SvnOperationContext;
-}
-
-export type Operation =
-  | UploadFileOperation
-  | UploadDirectoryOperation
-  | DeleteFileOperation
-  | DeleteDirectoryOperation
-  | SvnCommitOperation;
+export type Operation = UploadFileOperation | UploadDirectoryOperation | DeleteFileOperation | DeleteDirectoryOperation;
 
 /**
  * @interface DeployPlan

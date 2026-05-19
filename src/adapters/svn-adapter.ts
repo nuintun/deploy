@@ -8,8 +8,7 @@ import { dirname, join, toPosix } from '/utils/path';
 import { SvnOperationContext } from '/types/operation';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { createLogger, getErrorMessage } from '/utils/logger';
-import { SvnTransportAdapter } from '/adapters/transport-adapter';
-import { EntryFilters } from '/types/config';
+import { DirectoryUploadOptions, TransportAdapter } from '/adapters/transport-adapter';
 
 const SVN_EXECUTABLE = 'svn';
 const STATUS_BATCH_SIZE = 50;
@@ -21,7 +20,7 @@ interface CommandResult {
   stderr: string;
 }
 
-export class SvnAdapter implements SvnTransportAdapter {
+export class SvnAdapter implements TransportAdapter {
   #fileWalker: FileWalker;
   #config: SvnOperationContext;
   #pendingPaths = new Set<string>();
@@ -129,10 +128,6 @@ export class SvnAdapter implements SvnTransportAdapter {
     }
   }
 
-  async dispose(): Promise<void> {
-    this.#pendingPaths.clear();
-  }
-
   async uploadFile(source: string, target: string): Promise<void> {
     this.#assertSafePath(target);
 
@@ -148,10 +143,10 @@ export class SvnAdapter implements SvnTransportAdapter {
     this.#pendingPaths.add(target);
   }
 
-  async uploadDirectory(source: string, target: string, filters?: EntryFilters): Promise<void> {
+  async uploadDirectory(source: string, target: string, options?: DirectoryUploadOptions): Promise<void> {
     this.#assertSafePath(target);
 
-    const walker = this.#fileWalker.walk(source, { filters });
+    const walker = this.#fileWalker.walk(source, options);
 
     for await (const entry of walker) {
       if (entry.isFile) {
@@ -181,8 +176,10 @@ export class SvnAdapter implements SvnTransportAdapter {
     }
   }
 
-  async commit(message?: string): Promise<void> {
+  async #commitPendingChanges(message?: string): Promise<void> {
     if (this.#pendingPaths.size === 0) {
+      logger.debug('无待提交的变更');
+
       return;
     }
 
@@ -192,13 +189,23 @@ export class SvnAdapter implements SvnTransportAdapter {
     const statusResult = await this.#runSvnCommand(['status', ...paths]);
 
     if (!statusResult.stdout.trim()) {
+      logger.debug('无实际变更，跳过提交');
+
       return;
     }
 
     const commitMessage = message || this.#config.commitMessage || 'deploy update';
 
+    logger.info(`提交 SVN 变更`, { pathCount: paths.length, message: commitMessage });
+
     await this.#runSvnCommand(['commit', '-m', commitMessage, ...paths]);
 
     this.#pendingPaths.clear();
+
+    logger.info('SVN 提交完成');
+  }
+
+  async dispose(): Promise<void> {
+    await this.#commitPendingChanges();
   }
 }

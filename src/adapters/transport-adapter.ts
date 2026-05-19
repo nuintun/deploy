@@ -2,13 +2,25 @@
  * @module transport-adapter
  */
 
-import type { EntryFilters } from '/types/config';
+/**
+ * @interface DirectoryUploadOptions
+ * @description 目录上传选项
+ */
+export interface DirectoryUploadOptions {
+  filter?: (relativePath: string) => boolean;
+}
 
 /**
  * @interface TransportAdapter
  * @description 传输适配器基础接口，定义所有协议共用的核心操作
  */
 export interface TransportAdapter {
+  /**
+   * @method connect
+   * @description 建立连接（可选，仅 FTP 等需要显式连接的协议实现）
+   */
+  connect?(): Promise<void>;
+
   /**
    * @method deleteFile
    * @description 删除文件
@@ -36,37 +48,13 @@ export interface TransportAdapter {
    * @description 上传目录
    * @param source 本地目录路径
    * @param target 远程目录路径
+   * @param options 上传选项（包含过滤器）
    */
-  uploadDirectory(source: string, target: string, filters?: EntryFilters): Promise<void>;
+  uploadDirectory(source: string, target: string, options?: DirectoryUploadOptions): Promise<void>;
 
   /**
    * @method dispose
-   * @description 释放资源
+   * @description 释放资源（SVN 会在此时提交变更）
    */
   dispose(): Promise<void>;
-}
-
-/**
- * @interface FtpTransportAdapter
- * @description FTP 传输适配器接口，扩展自基础适配器
- */
-export interface FtpTransportAdapter extends TransportAdapter {
-  /**
-   * @method connect
-   * @description 建立 FTP 连接
-   */
-  connect(): Promise<void>;
-}
-
-/**
- * @interface SvnTransportAdapter
- * @description SVN 传输适配器接口，扩展自基础适配器
- */
-export interface SvnTransportAdapter extends TransportAdapter {
-  /**
-   * @method commit
-   * @description 提交待处理变更
-   * @param message 提交说明
-   */
-  commit(message?: string): Promise<void>;
 }

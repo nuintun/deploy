@@ -2,11 +2,12 @@
  * @module deploy-planner
  */
 
+import { basename } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { globToRegex } from '/utils/glob';
-import { join, resolve, toPosix } from '/utils/path';
+import { join, normalize, resolve, toPosix } from '/utils/path';
 import { captureError, createLogger, getErrorMessage } from '/utils/logger';
-import { DeployTask, DeployEntry, EntryFilters, FtpConfig, SvnConfig } from '/types/config';
+import { DeployTask, DeployEntry, FtpConfig, SvnConfig } from '/types/config';
 import { DeployPlan, FtpOperationContext, Operation, OperationType, SvnOperationContext } from '/types/operation';
 
 let taskCounter = 0;
@@ -18,7 +19,7 @@ function generateOperationId(prefix: string): string {
   return `${prefix}-${operationCounter++}`;
 }
 
-function buildFilters(entry: DeployEntry): EntryFilters | undefined {
+function buildFilterPredicate(entry: DeployEntry): ((relativePath: string) => boolean) | undefined {
   const excludePatterns = entry.exclude ?? [];
   const includePatterns = entry.include ?? [];
 
@@ -39,11 +40,41 @@ function buildFilters(entry: DeployEntry): EntryFilters | undefined {
     (toPosix(pattern).includes('/') ? includePathRegexps : includeBasenameRegexps).push(globToRegex(pattern));
   }
 
-  return {
-    excludePathRegexps,
-    includePathRegexps,
-    excludeBasenameRegexps,
-    includeBasenameRegexps
+  return (relativePath: string) => {
+    const normalized = normalize(relativePath);
+    const baseName = basename(normalized);
+
+    for (const regex of excludeBasenameRegexps) {
+      if (regex.test(baseName)) {
+        return false;
+      }
+    }
+
+    for (const regex of excludePathRegexps) {
+      if (regex.test(normalized)) {
+        return false;
+      }
+    }
+
+    const hasInclude = includeBasenameRegexps.length > 0 || includePathRegexps.length > 0;
+
+    if (!hasInclude) {
+      return true;
+    }
+
+    for (const regex of includeBasenameRegexps) {
+      if (regex.test(baseName)) {
+        return true;
+      }
+    }
+
+    for (const regex of includePathRegexps) {
+      if (regex.test(normalized)) {
+        return true;
+      }
+    }
+
+    return false;
   };
 }
 
@@ -68,10 +99,104 @@ function stripGlobBase(path: string): string {
   return baseSegments.join('/') || '.';
 }
 
+function generateFtpAdapterKey(host: string, port?: number): string {
+  return `ftp-${host}:${port ?? 21}`;
+}
+
+function generateSvnAdapterKey(workspace: string): string {
+  return `svn-${workspace}`;
+}
+
 export class DeployPlanner {
   static resetCounters(): void {
     taskCounter = 0;
     operationCounter = 0;
+  }
+
+  #createFtpOperations(
+    source: string,
+    target: string,
+    ftpConfig: FtpConfig,
+    isDirectory: boolean,
+    filter: ((relativePath: string) => boolean) | undefined
+  ): Operation[] {
+    const operations: Operation[] = [];
+    const remoteTarget = join(ftpConfig.workspace, target);
+    const adapterKey = generateFtpAdapterKey(ftpConfig.host, ftpConfig.port);
+    const context: FtpOperationContext = {
+      adapter: 'ftp',
+      adapterKey,
+      host: ftpConfig.host,
+      port: ftpConfig.port,
+      user: ftpConfig.user,
+      secure: ftpConfig.secure,
+      timeout: ftpConfig.timeout,
+      password: ftpConfig.password
+    };
+
+    if (ftpConfig.cleanBeforeDeploy ?? false) {
+      operations.push({
+        context,
+        target: remoteTarget,
+        id: generateOperationId('ftp-delete'),
+        description: `FTP 删除旧目标: ${remoteTarget}`,
+        type: isDirectory ? OperationType.DELETE_DIRECTORY : OperationType.DELETE_FILE
+      } satisfies Operation);
+    }
+
+    operations.push({
+      source,
+      filter,
+      context,
+      target: remoteTarget,
+      id: generateOperationId('ftp-upload'),
+      type: isDirectory ? OperationType.UPLOAD_DIRECTORY : OperationType.UPLOAD_FILE,
+      description: isDirectory ? `FTP 上传目录: ${source} -> ${remoteTarget}` : `FTP 上传文件: ${source} -> ${remoteTarget}`
+    } satisfies Operation);
+
+    return operations;
+  }
+
+  #createSvnOperations(
+    source: string,
+    target: string,
+    svnConfig: SvnConfig,
+    isDirectory: boolean,
+    filter: ((relativePath: string) => boolean) | undefined
+  ): Operation[] {
+    const operations: Operation[] = [];
+    const adapterKey = generateSvnAdapterKey(svnConfig.workspace);
+    const context: SvnOperationContext = {
+      adapter: 'svn',
+      adapterKey,
+      workspace: svnConfig.workspace,
+      commitMessage: svnConfig.commitMessage,
+      cleanBeforeDeploy: svnConfig.cleanBeforeDeploy
+    };
+
+    if (svnConfig.cleanBeforeDeploy ?? false) {
+      operations.push({
+        target,
+        context,
+        type: isDirectory ? OperationType.DELETE_DIRECTORY : OperationType.DELETE_FILE,
+        id: generateOperationId('svn-delete'),
+        description: `SVN 删除旧目标: ${target}`
+      } satisfies Operation);
+    }
+
+    operations.push({
+      target,
+      source,
+      filter,
+      context,
+      id: generateOperationId('svn-upload'),
+      description: isDirectory
+        ? `复制目录到 SVN 工作副本: ${source} -> ${target}`
+        : `复制文件到 SVN 工作副本: ${source} -> ${target}`,
+      type: isDirectory ? OperationType.UPLOAD_DIRECTORY : OperationType.UPLOAD_FILE
+    } satisfies Operation);
+
+    return operations;
   }
 
   async #processEntry(
@@ -95,77 +220,17 @@ export class DeployPlanner {
     try {
       const stat = await lstat(source);
       const isDirectory = stat.isDirectory();
-      const filters = buildFilters(entry);
+      const filter = buildFilterPredicate(entry);
 
       if (ftpConfig) {
-        const remoteTarget = join(ftpConfig.workspace, target);
-        const adapterKey = `ftp-${ftpConfig.host}:${ftpConfig.port ?? 21}`;
-        const context: FtpOperationContext = {
-          adapter: 'ftp',
-          adapterKey,
-          host: ftpConfig.host,
-          port: ftpConfig.port,
-          user: ftpConfig.user,
-          secure: ftpConfig.secure,
-          timeout: ftpConfig.timeout,
-          password: ftpConfig.password
-        };
-
-        if (ftpConfig.cleanBeforeDeploy ?? false) {
-          operations.push({
-            context,
-            target: remoteTarget,
-            id: generateOperationId('ftp-delete'),
-            description: `FTP 删除旧目标: ${remoteTarget}`,
-            type: isDirectory ? OperationType.DELETE_DIRECTORY : OperationType.DELETE_FILE
-          } satisfies Operation);
-        }
-
-        operations.push({
-          source,
-          filters,
-          context,
-          target: remoteTarget,
-          id: generateOperationId('ftp-upload'),
-          type: isDirectory ? OperationType.UPLOAD_DIRECTORY : OperationType.UPLOAD_FILE,
-          description: isDirectory ? `FTP 上传目录: ${source} -> ${remoteTarget}` : `FTP 上传文件: ${source} -> ${remoteTarget}`
-        } satisfies Operation);
-
-        logger.debug(`FTP 操作已规划: ${source} -> ${remoteTarget}`);
+        const ftpOps = this.#createFtpOperations(source, target, ftpConfig, isDirectory, filter);
+        operations.push(...ftpOps);
+        logger.debug(`FTP 操作已规划: ${source} -> ${join(ftpConfig.workspace, target)}`);
       }
 
       if (svnConfig) {
-        const adapterKey = `svn-${svnConfig.workspace}`;
-        const context: SvnOperationContext = {
-          adapter: 'svn',
-          adapterKey,
-          workspace: svnConfig.workspace,
-          commitMessage: svnConfig.commitMessage,
-          cleanBeforeDeploy: svnConfig.cleanBeforeDeploy
-        };
-
-        if (svnConfig.cleanBeforeDeploy ?? false) {
-          operations.push({
-            target,
-            context,
-            type: isDirectory ? OperationType.DELETE_DIRECTORY : OperationType.DELETE_FILE,
-            id: generateOperationId('svn-delete'),
-            description: `SVN 删除旧目标: ${target}`
-          } satisfies Operation);
-        }
-
-        operations.push({
-          target,
-          source,
-          filters,
-          context,
-          id: generateOperationId('svn-upload'),
-          description: isDirectory
-            ? `复制目录到 SVN 工作副本: ${source} -> ${target}`
-            : `复制文件到 SVN 工作副本: ${source} -> ${target}`,
-          type: isDirectory ? OperationType.UPLOAD_DIRECTORY : OperationType.UPLOAD_FILE
-        } satisfies Operation);
-
+        const svnOps = this.#createSvnOperations(source, target, svnConfig, isDirectory, filter);
+        operations.push(...svnOps);
         logger.debug(`SVN 操作已规划: ${source} -> ${target}`);
       }
     } catch (error) {
@@ -195,21 +260,6 @@ export class DeployPlanner {
       const entryOperations = await this.#processEntry(baseDir, entry, task.ftp, task.svn);
 
       operations.push(...entryOperations);
-    }
-
-    if (task.svn) {
-      operations.push({
-        type: OperationType.SVN_COMMIT,
-        id: generateOperationId('svn-commit'),
-        description: `提交 SVN: ${task.svn.workspace}`,
-        context: {
-          adapter: 'svn',
-          workspace: task.svn.workspace,
-          commitMessage: task.svn.commitMessage,
-          adapterKey: `svn-${task.svn.workspace}`,
-          cleanBeforeDeploy: task.svn.cleanBeforeDeploy
-        }
-      } satisfies Operation);
     }
 
     const planName = task.name || `任务-${taskCounter}`;
