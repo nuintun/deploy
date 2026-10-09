@@ -35,7 +35,7 @@
     "build": "pnpm build:esm && pnpm build:fix-types && pnpm format"
   },
   "dependencies": {
-    "basic-ftp": "^6.0.1",
+    "basic-ftp": "^6.2.1",
     "tslib": "^2.8.1"
   },
   "devDependencies": {

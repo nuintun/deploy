@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       basic-ftp:
-        specifier: ^6.0.1
-        version: 6.0.1
+        specifier: ^6.2.1
+        version: 6.2.1
       tslib:
         specifier: ^2.8.1
         version: 2.8.1
@@ -230,8 +230,8 @@ packages:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
 
-  basic-ftp@6.0.1:
-    resolution: {integrity: sha512-3ilxa3n4276wGQp/ImRAuz4ALdsj/2Wd3FqoZBZlajDYnByCZ0JMb4+26Rde0wGXIbM0G2HWSfr/Fi8b21KX8g==}
+  basic-ftp@6.2.1:
+    resolution: {integrity: sha512-bK67isD+lKq46AU8vNtjvMaT2ZqAOAmNCbxUHlFBRD4k15NWxyEjmaKtZPlgce58So4BNTjITGQOVTjL9y0ECA==}
     engines: {node: '>=10.0.0'}
 
   brace-expansion@5.0.6:
@@ -467,7 +467,7 @@ snapshots:
 
   balanced-match@4.0.4: {}
 
-  basic-ftp@6.0.1: {}
+  basic-ftp@6.2.1: {}
 
   brace-expansion@5.0.6:
     dependencies:
